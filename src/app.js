@@ -7,7 +7,12 @@ import {
   HeadBucketCommand, 
   DeleteBucketCommand, 
   ListObjectsV2Command,
-  GetBucketLocationCommand  
+  GetBucketLocationCommand,
+  PutBucketWebsiteCommand,
+  PutBucketPolicyCommand,
+  PutObjectCommand,
+  PutPublicAccessBlockCommand,
+  PutBucketCorsCommand
 } from "@aws-sdk/client-s3";
 import { 
   LightsailClient, 
@@ -55,18 +60,17 @@ async function isBucketNameAvailable(bucketName) {
   }
 }
 
-// Endpoint: Listar buckets
 app.get('/api/buckets', async (req, res) => {
   try {
     const data = await s3Client.send(new ListBucketsCommand({}));
     const buckets = data.Buckets.map(bucket => ({
       name: bucket.Name,
-      creationDate: bucket.CreationDate
+      creationDate: bucket.CreationDate,
+      endpoint: `http://${bucket.Name}.s3-website.${process.env.AWS_REGION}.amazonaws.com`
     }));
     res.json({ buckets });
   } catch (error) {
-    console.error('Error listando buckets:', error);
-    res.status(500).json({ error: error.message });
+    // ... manejo de error ...
   }
 });
 
@@ -95,26 +99,109 @@ app.post('/api/buckets', async (req, res) => {
       if (headError.name !== 'NotFound') throw headError;
     }
 
-    // 3. Creación del bucket
+    // 3. Crear bucket
     await s3Client.send(new CreateBucketCommand({
       Bucket: bucketName,
-      CreateBucketConfiguration: process.env.AWS_REGION === 'eu-south-2' 
+      CreateBucketConfiguration: process.env.AWS_REGION === 'us-east-1' 
         ? undefined
         : { LocationConstraint: process.env.AWS_REGION }
     }));
 
+    await s3Client.send(new PutPublicAccessBlockCommand({
+      Bucket: bucketName,
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: false,
+        IgnorePublicAcls: false,
+        BlockPublicPolicy: false,
+        RestrictPublicBuckets: false
+      }
+    }));
+
+    await s3Client.send(new PutBucketPolicyCommand({
+      Bucket: bucketName,
+      Policy: JSON.stringify(bucketPolicy)
+    }));
+
+    // 4. Configurar hosting estático
+    await s3Client.send(new PutBucketWebsiteCommand({
+      Bucket: bucketName,
+      WebsiteConfiguration: {
+        IndexDocument: { Suffix: "index.html" },
+        ErrorDocument: { Key: "error.html" }
+      }
+    }));
+
+    await s3Client.send(new PutBucketCorsCommand({
+      Bucket: bucketName,
+      CORSConfiguration: {
+        CORSRules: [{
+          AllowedHeaders: ["*"],
+          AllowedMethods: ["GET"],
+          AllowedOrigins: ["*"],
+          ExposeHeaders: []
+        }]
+      }
+    }));
+    
+    await s3Client.send(new PutObjectCommand({
+      Bucket: bucketName,
+      Key: "index.html",
+      Body: defaultHTML.index,
+      ContentType: "text/html"
+    }));
+    
+    await s3Client.send(new PutObjectCommand({
+      Bucket: bucketName,
+      Key: "error.html",
+      Body: defaultHTML.error,
+      ContentType: "text/html"
+    }));
+
+    // 5. Añadir política de acceso público
+    const bucketPolicy = {
+      Version: "2012-10-17",
+      Statement: [
+        {
+          Sid: "PublicReadGetObject",
+          Effect: "Allow",
+          Principal: "*",
+          Action: "s3:GetObject",
+          Resource: `arn:aws:s3:::${bucketName}/*`
+        }
+      ]
+    };
+    
+    // 6. Subir archivos HTML por defecto
+    const defaultHTML = {
+      index: process.env.DEFAULT_INDEX_CONTENT || '<h1>Bienvenido a mi sitio</h1>',
+      error: process.env.DEFAULT_ERROR_CONTENT || '<h1>Error 404</h1>'
+    };
+
     res.status(201).json({
       success: true,
-      message: `Bucket ${bucketName} creado`,
-      bucketName: bucketName
+      message: `Bucket ${bucketName} creado con hosting estático`,
+      endpoint: `http://${bucketName}.s3-website.${process.env.AWS_REGION}.amazonaws.com`
     });
 
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({
-      errorType: error.name || 'UnknownError',
-      error: error.message
-    });
+
+    // Obtener bucketName del body aunque falle la validación
+    const bucketName = req.body?.bucketName || 'nombre_no_definido';
+
+      // Rollback solo si existe
+  if (bucketName && error.name !== 'BucketAlreadyExists') {
+    try {
+      await s3Client.send(new DeleteBucketCommand({ Bucket: bucketName }));
+    } catch (deleteError) {
+      console.error('Error en rollback:', deleteError);
+    }
+  }
+
+  res.status(500).json({
+    errorType: error.name || 'UnknownError',
+    error: 'Error al configurar el hosting estático'
+  });
   }
 });
 
@@ -315,6 +402,22 @@ app.post('/api/lightsail/instances', async (req, res) => {
       console.error('BACKEND ERROR: Error general en el endpoint de creación:', error);
       res.status(500).json({ error: 'Error en la solicitud.', errorType: error.name });
     }
+  });
+
+  app.get('/api/buckets/:bucketName/website-test', async (req, res) => {
+    try {
+      const { bucketName } = req.params;
+      const testUrl = getWebsiteEndpoint(bucketName, process.env.AWS_REGION);
+      const response = await fetch(testUrl);
+      
+      res.json({
+        status: response.status,
+        working: response.ok,
+        url: testUrl
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Error testing website" });
+    }
   });
 
 app.listen(port, () => {
