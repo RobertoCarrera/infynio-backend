@@ -23,6 +23,7 @@ import {
   GetInstanceCommand,
   CreateKeyPairCommand
 } from "@aws-sdk/client-lightsail";
+import { Route53DomainsClient, CheckDomainAvailabilityCommand } from "@aws-sdk/client-route-53-domains";
 import s3Client from "./config/aws-config.js";
 import dotenv from 'dotenv';
 
@@ -30,6 +31,14 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+// Configuración del cliente de Route 53
+const route53Client = new Route53DomainsClient({
+  region: process.env.AWS_ROUTE53_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
 
 // Configuración de CORS para desarrollo
 app.use(cors({
@@ -419,6 +428,28 @@ app.post('/api/lightsail/instances', async (req, res) => {
       res.status(500).json({ error: "Error testing website" });
     }
   });
+
+  // Endpoint: Comprobar disponibilidad de dominio
+app.get('/api/domains/check', async (req, res) => {
+  try {
+    const { domainName } = req.query;
+
+    if (!domainName) {
+      return res.status(400).json({ error: 'El parámetro "domainName" es obligatorio.' });
+    }
+
+    const command = new CheckDomainAvailabilityCommand({ DomainName: domainName });
+    const data = await route53Client.send(command);
+
+    res.json({
+      domainName,
+      availability: data.Availability // Posibles valores: "AVAILABLE", "UNAVAILABLE", "RESERVED", etc.
+    });
+  } catch (error) {
+    console.error('Error comprobando disponibilidad de dominio:', error);
+    res.status(500).json({ error: error.message, errorType: error.name });
+  }
+});
 
 app.listen(port, () => {
   console.log(`🚀 Backend listo en http://localhost:${port}`);
