@@ -23,7 +23,12 @@ import {
   GetInstanceCommand,
   CreateKeyPairCommand
 } from "@aws-sdk/client-lightsail";
-import { Route53DomainsClient, CheckDomainAvailabilityCommand } from "@aws-sdk/client-route-53-domains";
+import { 
+  Route53DomainsClient,
+  CheckDomainAvailabilityCommand,
+  GetDomainDetailCommand,
+  GetDomainSuggestionsCommand
+} from "@aws-sdk/client-route-53-domains";
 import s3Client from "./config/aws-config.js";
 import dotenv from 'dotenv';
 
@@ -429,6 +434,11 @@ app.post('/api/lightsail/instances', async (req, res) => {
     }
   });
 
+  async function getDomainDetails(domainName) {
+    const command = new GetDomainDetailCommand({ DomainName: domainName });
+    const response = await route53Client.send(command);
+    console.log("Domain Details:", response);
+  }
   // Endpoint: Comprobar disponibilidad de dominio
 app.get('/api/domains/check', async (req, res) => {
   try {
@@ -447,6 +457,58 @@ app.get('/api/domains/check', async (req, res) => {
     });
   } catch (error) {
     console.error('Error comprobando disponibilidad de dominio:', error);
+    res.status(500).json({ error: error.message, errorType: error.name });
+  }
+});
+
+// Endpoint: Obtener detalles del dominio
+app.get('/api/domains/details', async (req, res) => {
+  try {
+    const { domainName } = req.query;
+
+    if (!domainName) {
+      return res.status(400).json({ error: 'El parámetro "domainName" es obligatorio.' });
+    }
+
+    const command = new GetDomainDetailCommand({ DomainName: domainName });
+    const response = await route53Client.send(command);
+
+    res.json({
+      domainName: response.DomainName,
+      status: response.Status,
+      autoRenew: response.AutoRenew,
+      expiry: response.Expiry,
+      nameservers: response.Nameservers,
+      contact: response.AdminContact,
+    });
+  } catch (error) {
+    console.error('Error obteniendo detalles del dominio:', error);
+    res.status(500).json({ error: error.message, errorType: error.name });
+  }
+});
+
+// Endpoint: Obtener sugerencias de dominios
+app.get('/api/domains/suggestions', async (req, res) => {
+  try {
+    const { domainName } = req.query;
+
+    if (!domainName) {
+      return res.status(400).json({ error: 'El parámetro "domainName" es obligatorio.' });
+    }
+
+    const command = new GetDomainSuggestionsCommand({
+      DomainName: domainName,
+      SuggestionCount: 3, // Número de sugerencias
+      OnlyAvailable: true // Solo dominios disponibles
+    });
+
+    const response = await route53Client.send(command);
+
+    res.json({
+      suggestions: response.SuggestionsList || []
+    });
+  } catch (error) {
+    console.error('Error obteniendo sugerencias de dominios:', error);
     res.status(500).json({ error: error.message, errorType: error.name });
   }
 });
