@@ -117,6 +117,20 @@ app.post('/api/buckets', async (req, res) => {
       }
     }));
 
+    // 5. Añadir política de acceso público
+    const bucketPolicy = {
+      Version: "2012-10-17",
+      Statement: [
+        {
+          Sid: "PublicReadGetObject",
+          Effect: "Allow",
+          Principal: "*",
+          Action: "s3:GetObject",
+          Resource: `arn:aws:s3:::${bucketName}/*`
+        }
+      ]
+    };
+
     await s3Client.send(new PutBucketPolicyCommand({
       Bucket: bucketName,
       Policy: JSON.stringify(bucketPolicy)
@@ -143,6 +157,12 @@ app.post('/api/buckets', async (req, res) => {
       }
     }));
     
+    // 6. Subir archivos HTML por defecto
+    const defaultHTML = {
+      index: process.env.DEFAULT_INDEX_CONTENT || '<h1>Bienvenido a mi sitio</h1>',
+      error: process.env.DEFAULT_ERROR_CONTENT || '<h1>Error 404</h1>'
+    };
+    
     await s3Client.send(new PutObjectCommand({
       Bucket: bucketName,
       Key: "index.html",
@@ -156,26 +176,6 @@ app.post('/api/buckets', async (req, res) => {
       Body: defaultHTML.error,
       ContentType: "text/html"
     }));
-
-    // 5. Añadir política de acceso público
-    const bucketPolicy = {
-      Version: "2012-10-17",
-      Statement: [
-        {
-          Sid: "PublicReadGetObject",
-          Effect: "Allow",
-          Principal: "*",
-          Action: "s3:GetObject",
-          Resource: `arn:aws:s3:::${bucketName}/*`
-        }
-      ]
-    };
-    
-    // 6. Subir archivos HTML por defecto
-    const defaultHTML = {
-      index: process.env.DEFAULT_INDEX_CONTENT || '<h1>Bienvenido a mi sitio</h1>',
-      error: process.env.DEFAULT_ERROR_CONTENT || '<h1>Error 404</h1>'
-    };
 
     res.status(201).json({
       success: true,
